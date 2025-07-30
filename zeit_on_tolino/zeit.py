@@ -36,22 +36,96 @@ def _get_credentials() -> Tuple[str, str]:
 
 
 def _login(webdriver: WebDriver) -> None:
-    username, password = _get_credentials()
-    webdriver.get(ZEIT_LOGIN_URL)
-
-    username_field = webdriver.find_element(By.ID, "login_email")
-    username_field.send_keys(username)
-    password_field = webdriver.find_element(By.ID, "login_pass")
-    password_field.send_keys(password)
-
-    btn = webdriver.find_element(By.CLASS_NAME, "submit-button.log")
-    btn.click()
-    time.sleep(Delay.small)
-
-    if "anmelden" in webdriver.current_url:
-        raise RuntimeError("Failed to login, check your login credentials.")
-
-    WebDriverWait(webdriver, Delay.medium).until(EC.presence_of_element_located((By.CLASS_NAME, "page-section-header")))
+    try:
+        webdriver.get(ZEIT_LOGIN_URL)
+        time.sleep(Delay.medium)
+        
+        log.info(f"Current URL: {webdriver.current_url}")
+        
+        # First check if we're already logged in by looking for the download button
+        try:
+            if BUTTON_TEXT_TO_RECENT_EDITION in webdriver.page_source:
+                log.info("Already logged into ZEIT")
+                # Dump cookies in detail for setting up GitHub Actions
+                cookies = webdriver.get_cookies()
+                log.info("Current cookies (full details):")
+                for cookie in cookies:
+                    log.info(f"""
+Cookie details:
+  Name: {cookie['name']}
+  Value: {cookie['value']}
+  Domain: {cookie.get('domain')}
+  Path: {cookie.get('path')}
+  Secure: {cookie.get('secure')}
+  HttpOnly: {cookie.get('httpOnly')}
+  Expiry: {cookie.get('expiry')}
+""")
+                return
+        except Exception as e:
+            log.info(f"Error checking login state: {e}")
+        
+        # If we get here, we need to log in
+        username, password = _get_credentials()
+        log.info(f"ZEIT_PREMIUM_USER is {'set' if username else 'not set'}")
+        log.info(f"ZEIT_PREMIUM_PASSWORD is {'set' if password else 'not set'}")
+        
+        # Wait for page to be fully loaded
+        try:
+            WebDriverWait(webdriver, Delay.large).until(
+                lambda d: d.execute_script('return document.readyState') == 'complete'
+            )
+            log.info("Page fully loaded")
+        except Exception as e:
+            log.error(f"Page did not finish loading: {e}")
+            log.info(f"Current URL: {webdriver.current_url}")
+            raise
+            
+        # Look for login form or download button
+        try:
+            # First check if we're already on the e-paper page with download button
+            if BUTTON_TEXT_TO_RECENT_EDITION in webdriver.page_source:
+                log.info("Found download button - already logged in")
+                return
+                
+            # If not, look for login form
+            username_field = WebDriverWait(webdriver, Delay.medium).until(
+                EC.presence_of_element_located((By.ID, "login_email"))
+            )
+            password_field = webdriver.find_element(By.ID, "login_pass")
+            
+            # Fill in credentials
+            username_field.send_keys(username)
+            password_field.send_keys(password)
+            
+            # Click login button
+            btn = webdriver.find_element(By.CLASS_NAME, "submit-button.log")
+            btn.click()
+            time.sleep(Delay.medium)
+            
+            # Check if we're still on login page
+            if "anmelden" in webdriver.current_url:
+                log.error("Still on login page after submission")
+                log.info("Current URL: " + webdriver.current_url)
+                log.info("Page source: " + webdriver.page_source[:500])
+                raise RuntimeError("Failed to login, check your login credentials.")
+            
+            # Wait for successful login
+            WebDriverWait(webdriver, Delay.medium).until(
+                EC.presence_of_element_located((By.CLASS_NAME, "page-section-header"))
+            )
+            
+        except Exception as e:
+            log.error(f"Login failed: {e}")
+            log.info("Page source: " + webdriver.page_source[:500])
+            raise
+            
+    except Exception as e:
+        log.error(f"Login failed: {e}")
+        screenshots_dir = Path(os.getenv('GITHUB_WORKSPACE', '.')) / "screenshots"
+        screenshots_dir.mkdir(exist_ok=True)
+        screenshot_path = screenshots_dir / "zeit_login_failure.png"
+        webdriver.save_screenshot(str(screenshot_path))
+        raise
 
 
 def _get_latest_downloaded_file_path(download_dir: str) -> Path:

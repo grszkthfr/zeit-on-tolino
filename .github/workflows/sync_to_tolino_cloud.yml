@@ -1,18 +1,19 @@
-
 name: Periodic Sync
 
 on:
+  repository_dispatch:
+    types: [email-trigger]
   schedule:
       # Runs multiple times on Wednesday at *6 to avoid high load on github actions at the full hour.
       # Rational for running multiple times is to catch the new release as early as possible. Note,
       # in case the most recent release is uploaded to your tolino cloud, the subsequent runs of this 
       # action are expected to fail.
     - cron: '06 17 * * WED'   # corresponds to 19:06 CEST
-    - cron: '36 17 * * WED'   # corresponds to 19:36 CEST
+    #- cron: '36 17 * * WED'   # corresponds to 19:36 CEST
     - cron: '06 18 * * WED'   # corresponds to 20:06 CEST
-    - cron: '36 18 * * WED'   # corresponds to 20:36 CEST
+    #- cron: '36 18 * * WED'   # corresponds to 20:36 CEST
     - cron: '06 19 * * WED'   # corresponds to 21:06 CEST
-    - cron: '36 19 * * WED'   # corresponds to 21:36 CEST
+    #- cron: '36 19 * * WED'   # corresponds to 21:36 CEST
     - cron: '06 20 * * WED'   # corresponds to 22:06 CEST
   workflow_dispatch:  # allow running sync via github ui button
 
@@ -31,11 +32,27 @@ jobs:
       with:
         python-version: "3.10"
 
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
+    - name: Install Chrome
+      run: |
+        sudo mkdir -p /etc/apt/sources.list.d
+        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+        sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list'
+        sudo apt-get update
+        sudo apt-get install google-chrome-stable
+        google-chrome --version
+
+    - name: Setup Python and Poetry
+      run: |
+        python -m pip install --upgrade pip
+        pip install poetry
+        poetry config virtualenvs.create true
+        poetry config virtualenvs.in-project true
 
     - name: Install dependencies
-      run: poetry install --no-interaction --no-dev
+      run: |
+        rm -f poetry.lock
+        poetry add "undetected-chromedriver<4.0.0"  # Pin to a specific version
+        poetry install --no-interaction
 
     - name: Run Zeit-on-Tolino Script
       env:
@@ -45,3 +62,11 @@ jobs:
         TOLINO_PASSWORD: ${{ secrets.TOLINO_PASSWORD }}
         TOLINO_PARTNER_SHOP: ${{ secrets.TOLINO_PARTNER_SHOP }}
       run: poetry run python sync.py
+
+    - name: Upload screenshot
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: screenshots
+        path: screenshots/
+        retention-days: 5
